@@ -4,7 +4,7 @@ services:
     ports:
       - "9001:9001"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/.well-known/agent-card.json')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/a2a/.well-known/agent-card.json')"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -14,7 +14,7 @@ services:
     ports:
       - "9002:9002"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9002/.well-known/agent-card.json')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9002/a2a/.well-known/agent-card.json')"]
       interval: 5s
       timeout: 3s
       retries: 5

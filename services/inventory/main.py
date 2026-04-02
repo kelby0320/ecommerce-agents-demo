@@ -3,13 +3,16 @@ from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from agent_executor import InventoryAgentExecutor
+from api import api_app
 
 agent_card = AgentCard(
     name="Inventory Agent",
     description="Manages product inventory. Can search products, check stock levels, and retrieve product details.",
-    url="http://localhost:9001",
+    url="http://localhost:9001/a2a",
     version="0.1.0",
     skills=[
         AgentSkill(
@@ -45,10 +48,17 @@ request_handler = DefaultRequestHandler(
     task_store=InMemoryTaskStore(),
 )
 
-app = A2AStarletteApplication(
+a2a_app = A2AStarletteApplication(
     agent_card=agent_card,
     http_handler=request_handler,
 )
 
+app = Starlette(
+    routes=[
+        Mount("/api", app=api_app),
+        Mount("/a2a", app=a2a_app.build()),
+    ]
+)
+
 if __name__ == "__main__":
-    uvicorn.run(app.build(), host="0.0.0.0", port=9001)
+    uvicorn.run(app, host="0.0.0.0", port=9001)

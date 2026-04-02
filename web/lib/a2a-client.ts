@@ -24,8 +24,8 @@ export async function fetchAgentCards(): Promise<{
   }
 
   const [invRes, ordRes] = await Promise.all([
-    fetch(`${INVENTORY_URL}/.well-known/agent-card.json`),
-    fetch(`${ORDERS_URL}/.well-known/agent-card.json`),
+    fetch(`${INVENTORY_URL}/a2a/.well-known/agent-card.json`),
+    fetch(`${ORDERS_URL}/a2a/.well-known/agent-card.json`),
   ]);
 
   if (!invRes.ok) throw new Error(`Failed to fetch inventory agent card: ${invRes.status}`);
@@ -58,7 +58,7 @@ async function sendA2AMessage(baseUrl: string, text: string): Promise<string> {
     },
   };
 
-  const res = await fetch(baseUrl, {
+  const res = await fetch(`${baseUrl}/a2a`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
