@@ -1,0 +1,34 @@
+services:
+  inventory:
+    build: ./services/inventory
+    ports:
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/.well-known/agent-card.json')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  orders:
+    build: ./services/orders
+    ports:
+      - "9002:9002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9002/.well-known/agent-card.json')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build: ./web
+    ports:
+      - "3000:3000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - INVENTORY_AGENT_URL=http://inventory:9001
+      - ORDERS_AGENT_URL=http://orders:9002
+    depends_on:
+      inventory:
+        condition: service_healthy
+      orders:
+        condition: service_healthy
