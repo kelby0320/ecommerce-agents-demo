@@ -1,10 +1,25 @@
 "use client";
 
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "@/components/ai-elements/message";
+import { OrderWidget } from "@/components/OrderWidget";
+import type { OrderWidgetProps } from "@/components/OrderWidget";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useState } from "react";
 
 const transport = new DefaultChatTransport({ api: "/api/chat" });
+
+// Maps widgetName values to their React components
+const widgetRegistry: Record<
+  string,
+  React.ComponentType<OrderWidgetProps>
+> = {
+  OrderWidget,
+};
 
 export default function Home() {
   const [input, setInput] = useState("");
@@ -29,9 +44,7 @@ export default function Home() {
             <h1 className="text-lg font-semibold text-zinc-100">
               E-Commerce Agent Demo
             </h1>
-            <p className="text-xs text-zinc-500">
-              Powered by A2A Protocol
-            </p>
+            <p className="text-xs text-zinc-500">Powered by A2A Protocol</p>
           </div>
         </div>
       </header>
@@ -51,9 +64,7 @@ export default function Home() {
                 ].map((suggestion) => (
                   <button
                     key={suggestion}
-                    onClick={() => {
-                      sendMessage({ text: suggestion });
-                    }}
+                    onClick={() => sendMessage({ text: suggestion })}
                     className="rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200"
                   >
                     {suggestion}
@@ -64,56 +75,86 @@ export default function Home() {
           )}
 
           {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${
-                message.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div
-                className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                  message.role === "user"
-                    ? "bg-indigo-600 text-white"
-                    : "bg-zinc-800 text-zinc-200"
-                }`}
-              >
-                {message.parts.map((part, i) => {
-                  if (part.type === "text") {
-                    return (
-                      <p key={i} className="whitespace-pre-wrap text-sm leading-relaxed">
-                        {part.text}
-                      </p>
-                    );
-                  }
-                  if ("toolName" in part) {
-                    return (
-                      <div
-                        key={i}
-                        className="my-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs"
-                      >
-                        <span className="font-mono text-indigo-400">
-                          {part.toolName}
+            <Message key={message.id} from={message.role}>
+              {message.parts.map((part, i) => {
+                if (part.type === "text") {
+                  return (
+                    <MessageContent
+                      key={i}
+                      className={
+                        message.role === "user"
+                          ? "group-[.is-user]:bg-indigo-600 group-[.is-user]:rounded-2xl group-[.is-user]:text-white"
+                          : undefined
+                      }
+                    >
+                      {message.role === "user" ? (
+                        <span className="whitespace-pre-wrap leading-relaxed">
+                          {part.text}
                         </span>
-                        <span className="text-zinc-500"> called</span>
-                      </div>
-                    );
+                      ) : (
+                        <MessageResponse
+                          isAnimating={
+                            status === "streaming" &&
+                            message.id === messages[messages.length - 1]?.id
+                          }
+                        >
+                          {part.text}
+                        </MessageResponse>
+                      )}
+                    </MessageContent>
+                  );
+                }
+
+                // Tool invocation parts: type is "tool-{toolName}" in AI SDK v6
+                const partType = part.type as string;
+                if (partType.startsWith("tool-")) {
+                  const toolPart = part as any;
+                  const toolName = partType.slice(5); // strip "tool-" prefix
+
+                  // Render widget when output is available and widgetName is set
+                  if (
+                    toolPart.state === "output-available" &&
+                    toolPart.output?.widgetName
+                  ) {
+                    const Widget = widgetRegistry[toolPart.output.widgetName];
+                    if (Widget) {
+                      return <Widget key={i} {...toolPart.output.widgetProps} />;
+                    }
                   }
-                  return null;
-                })}
-              </div>
-            </div>
+
+                  // Default tool call badge
+                  return (
+                    <div
+                      key={i}
+                      className="my-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs"
+                    >
+                      <span className="font-mono text-indigo-400">
+                        {toolName}
+                      </span>
+                      <span className="text-zinc-500">
+                        {toolPart.state === "output-available"
+                          ? " completed"
+                          : " called"}
+                      </span>
+                    </div>
+                  );
+                }
+
+                return null;
+              })}
+            </Message>
           ))}
 
           {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
-            <div className="flex justify-start">
-              <div className="rounded-2xl bg-zinc-800 px-4 py-3">
+            <Message from="assistant">
+              <MessageContent>
                 <div className="flex gap-1">
                   <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500" />
                   <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500 [animation-delay:0.15s]" />
                   <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-500 [animation-delay:0.3s]" />
                 </div>
-              </div>
-            </div>
+              </MessageContent>
+            </Message>
           )}
         </div>
 

@@ -37,7 +37,8 @@ When a user asks about products, availability, or inventory, use the query_inven
 When a user wants to place an order, check order status, or list orders, use the manage_orders tool.
 You can call both tools in sequence if needed (e.g., check stock before placing an order).
 
-Always be helpful and provide clear, concise responses based on the data returned by the agents.`;
+Always be helpful and provide clear, concise responses based on the data returned by the agents.
+When a tool result includes a "widgetName" field, the UI renders a visual widget for it — give a brief conversational summary rather than repeating the raw data.`;
 }
 
 export const tools = {
@@ -68,6 +69,26 @@ export const tools = {
     }),
     execute: async ({ query }) => {
       const result = await queryOrdersAgent(query);
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.order_id) {
+          return {
+            widgetName: "OrderWidget",
+            widgetProps: { order: parsed },
+            text: `Order ${parsed.order_id} — status: ${parsed.status}`,
+          };
+        }
+        if (Array.isArray(parsed.orders)) {
+          const count = parsed.total_count ?? parsed.orders.length;
+          return {
+            widgetName: "OrderWidget",
+            widgetProps: { orders: parsed.orders, totalCount: count },
+            text: `Found ${count} order(s).`,
+          };
+        }
+      } catch {
+        // Not parseable JSON or unrecognized shape — fall through to raw text
+      }
       return result;
     },
   }),
