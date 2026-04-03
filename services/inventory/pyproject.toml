@@ -4,6 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "a2a-sdk[http-server]>=0.3.20",
+    "anthropic>=0.50",
     "fastapi>=0.115",
+    "psycopg[binary]>=3.2",
     "uvicorn>=0.34",
 ]

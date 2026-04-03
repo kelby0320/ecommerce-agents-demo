@@ -39,9 +39,10 @@ export async function fetchAgentCards(): Promise<{
   return { inventory: inventoryCard!, orders: ordersCard! };
 }
 
-async function sendA2AMessage(baseUrl: string, text: string): Promise<string> {
+async function sendA2AMessage(baseUrl: string, text: string, userId?: string): Promise<string> {
   const messageId = crypto.randomUUID();
   const contextId = crypto.randomUUID();
+  const fullText = userId ? `[user_id:${userId}]\n${text}` : text;
 
   const body = {
     jsonrpc: "2.0",
@@ -52,13 +53,13 @@ async function sendA2AMessage(baseUrl: string, text: string): Promise<string> {
         kind: "message",
         messageId,
         role: "user",
-        parts: [{ kind: "text", text }],
+        parts: [{ kind: "text", text: fullText }],
         contextId,
       },
     },
   };
 
-  const res = await fetch(`${baseUrl}/a2a`, {
+  const res = await fetch(`${baseUrl}/a2a/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -108,10 +109,10 @@ async function sendA2AMessage(baseUrl: string, text: string): Promise<string> {
   return JSON.stringify(result);
 }
 
-export async function queryInventoryAgent(query: string): Promise<string> {
-  return sendA2AMessage(INVENTORY_URL, query);
+export async function queryInventoryAgent(query: string, userId?: string): Promise<string> {
+  return sendA2AMessage(INVENTORY_URL, query, userId);
 }
 
-export async function queryOrdersAgent(query: string): Promise<string> {
-  return sendA2AMessage(ORDERS_URL, query);
+export async function queryOrdersAgent(query: string, userId?: string): Promise<string> {
+  return sendA2AMessage(ORDERS_URL, query, userId);
 }

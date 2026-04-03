@@ -41,55 +41,71 @@ Always be helpful and provide clear, concise responses based on the data returne
 When a tool result includes a "widgetName" field, the UI renders a visual widget for it — give a brief conversational summary rather than repeating the raw data.`;
 }
 
-export const tools = {
-  query_inventory: tool({
-    description:
-      "Query the inventory agent to search products, check stock levels, or get product details.",
-    inputSchema: z.object({
-      query: z
-        .string()
-        .describe(
-          "The query to send to the inventory agent, e.g. 'search for electronics' or 'check stock for SKU001'"
-        ),
+export function createTools(userId: string) {
+  return {
+    query_inventory: tool({
+      description:
+        "Query the inventory agent to search products, check stock levels, or get product details.",
+      inputSchema: z.object({
+        query: z
+          .string()
+          .describe(
+            "The query to send to the inventory agent, e.g. 'search for electronics' or 'check stock for SKU001'"
+          ),
+      }),
+      execute: async ({ query }) => {
+        return queryInventoryAgent(query, userId);
+      },
     }),
-    execute: async ({ query }) => {
-      const result = await queryInventoryAgent(query);
-      return result;
-    },
-  }),
-  manage_orders: tool({
-    description:
-      "Query the orders agent to create orders, get order status, or list all orders.",
-    inputSchema: z.object({
-      query: z
-        .string()
-        .describe(
-          "The query to send to the orders agent, e.g. 'order 2 wireless mice' or 'list all orders'"
-        ),
+    manage_orders: tool({
+      description:
+        "Query the orders agent to create orders, get order status, or list all orders.",
+      inputSchema: z.object({
+        query: z
+          .string()
+          .describe(
+            "The query to send to the orders agent, e.g. 'order 2 wireless mice' or 'list all orders'"
+          ),
+      }),
+      execute: async ({ query }) => {
+        const result = await queryOrdersAgent(query, userId);
+        try {
+          const parsed = JSON.parse(result);
+
+          // Single order object (from create_order)
+          if (parsed.order_id && !Array.isArray(parsed)) {
+            return {
+              widgetName: "OrderWidget",
+              widgetProps: { order: { ...parsed, items: parsed.items ?? [] } },
+              text: `Order ${parsed.order_id} — status: ${parsed.status}`,
+            };
+          }
+
+          // Array of rows from SQL SELECT
+          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].order_id) {
+            type OrderRow = { order_id: string; status: string; items: unknown[] } & Record<string, unknown>;
+            const orders = parsed.map((o: Record<string, unknown>) => ({
+              ...o,
+              items: Array.isArray(o.items) ? o.items : [],
+            })) as OrderRow[];
+            if (orders.length === 1) {
+              return {
+                widgetName: "OrderWidget",
+                widgetProps: { order: orders[0] },
+                text: `Order ${orders[0].order_id} — status: ${orders[0].status}`,
+              };
+            }
+            return {
+              widgetName: "OrderWidget",
+              widgetProps: { orders, totalCount: orders.length },
+              text: `Found ${orders.length} order(s).`,
+            };
+          }
+        } catch {
+          // Not parseable JSON or unrecognized shape — fall through to raw text
+        }
+        return result;
+      },
     }),
-    execute: async ({ query }) => {
-      const result = await queryOrdersAgent(query);
-      try {
-        const parsed = JSON.parse(result);
-        if (parsed.order_id) {
-          return {
-            widgetName: "OrderWidget",
-            widgetProps: { order: parsed },
-            text: `Order ${parsed.order_id} — status: ${parsed.status}`,
-          };
-        }
-        if (Array.isArray(parsed.orders)) {
-          const count = parsed.total_count ?? parsed.orders.length;
-          return {
-            widgetName: "OrderWidget",
-            widgetProps: { orders: parsed.orders, totalCount: count },
-            text: `Found ${count} order(s).`,
-          };
-        }
-      } catch {
-        // Not parseable JSON or unrecognized shape — fall through to raw text
-      }
-      return result;
-    },
-  }),
-};
+  };
+}

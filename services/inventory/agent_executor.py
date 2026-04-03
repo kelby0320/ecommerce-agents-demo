@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import decimal
 import json
+import re
+
+import anthropic
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -14,80 +18,36 @@ from a2a.utils.artifact import new_text_artifact
 from a2a.utils.message import new_agent_text_message
 from a2a.utils.task import new_task
 
-PRODUCTS: dict[str, dict] = {
-    "SKU001": {
-        "name": "Wireless Mouse",
-        "price": 29.99,
-        "stock": 150,
-        "category": "electronics",
-    },
-    "SKU002": {
-        "name": "USB-C Hub",
-        "price": 49.99,
-        "stock": 45,
-        "category": "electronics",
-    },
-    "SKU003": {
-        "name": "Mechanical Keyboard",
-        "price": 89.99,
-        "stock": 0,
-        "category": "electronics",
-    },
-    "SKU004": {
-        "name": "Laptop Stand",
-        "price": 39.99,
-        "stock": 73,
-        "category": "accessories",
-    },
-    "SKU005": {
-        "name": "Webcam HD",
-        "price": 59.99,
-        "stock": 22,
-        "category": "electronics",
-    },
-}
+from db import get_agent_connection
+
+_anthropic = anthropic.AsyncAnthropic()
+
+_SYSTEM_PROMPT = """You are a SQL query generator for a PostgreSQL inventory database.
+
+Schema:
+  products(
+    sku       VARCHAR PRIMARY KEY,
+    name      VARCHAR,
+    price     NUMERIC,
+    stock     INTEGER,
+    category  VARCHAR,
+    user_id   UUID
+  )
+
+Generate a single SELECT query answering the user's question.
+Rules:
+- SELECT only. No INSERT, UPDATE, DELETE, DROP, or other mutations.
+- No semicolons at the end.
+- Do NOT add user_id conditions — Row Level Security handles that automatically.
+Return ONLY the SQL query, no explanation or markdown."""
 
 
-def search_products(query: str) -> str:
-    query_lower = query.lower()
-    matches = []
-    for sku, product in PRODUCTS.items():
-        if (
-            query_lower in product["name"].lower()
-            or query_lower in product["category"].lower()
-            or query_lower in sku.lower()
-        ):
-            matches.append({"sku": sku, **product})
-
-    if not matches:
-        # Return all products if no specific match
-        matches = [{"sku": sku, **p} for sku, p in PRODUCTS.items()]
-
-    return json.dumps(matches, indent=2)
-
-
-def check_stock(sku: str) -> str:
-    sku_upper = sku.upper()
-    if sku_upper in PRODUCTS:
-        p = PRODUCTS[sku_upper]
-        in_stock = p["stock"] > 0
-        return json.dumps(
-            {
-                "sku": sku_upper,
-                "name": p["name"],
-                "stock": p["stock"],
-                "in_stock": in_stock,
-                "price": p["price"],
-            }
-        )
-    return json.dumps({"error": f"Product {sku} not found"})
-
-
-def get_product(sku: str) -> str:
-    sku_upper = sku.upper()
-    if sku_upper in PRODUCTS:
-        return json.dumps({"sku": sku_upper, **PRODUCTS[sku_upper]})
-    return json.dumps({"error": f"Product {sku} not found"})
+def _parse_message(text: str) -> tuple[str, str]:
+    """Return (user_id, query). user_id is '' if not present."""
+    if text.startswith("[user_id:"):
+        end = text.index("]")
+        return text[9:end], text[end + 2:]
+    return "", text
 
 
 class InventoryAgentExecutor(AgentExecutor):
@@ -97,12 +57,13 @@ class InventoryAgentExecutor(AgentExecutor):
         task = context.current_task or new_task(context.message)
         await event_queue.enqueue_event(task)
 
-        # Extract text from the incoming message
         user_text = ""
         for part in context.message.parts:
             if hasattr(part.root, "text"):
                 user_text = part.root.text
                 break
+
+        user_id, query = _parse_message(user_text)
 
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
@@ -111,38 +72,34 @@ class InventoryAgentExecutor(AgentExecutor):
                 final=False,
                 status=TaskStatus(
                     state=TaskState.working,
-                    message=new_agent_text_message(
-                        "Looking up inventory..."
-                    ),
+                    message=new_agent_text_message("Generating SQL query..."),
                 ),
             )
         )
 
-        # Simple intent parsing
-        text_lower = user_text.lower()
-        if "stock" in text_lower or "available" in text_lower:
-            # Try to find a SKU or product name
-            for sku in PRODUCTS:
-                if sku.lower() in text_lower:
-                    result = check_stock(sku)
-                    break
-            else:
-                # Search by product name keywords
-                for sku, p in PRODUCTS.items():
-                    if p["name"].lower().split()[0].lower() in text_lower:
-                        result = check_stock(sku)
-                        break
-                else:
-                    result = search_products(user_text)
-        elif "product" in text_lower and any(
-            sku.lower() in text_lower for sku in PRODUCTS
-        ):
-            for sku in PRODUCTS:
-                if sku.lower() in text_lower:
-                    result = get_product(sku)
-                    break
-        else:
-            result = search_products(user_text)
+        try:
+            response = await _anthropic.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": query}],
+            )
+            raw = response.content[0].text.strip()
+            # Strip markdown code fences if present
+            raw = re.sub(r"```\w*\n?", "", raw).strip()
+            select_idx = raw.upper().find("SELECT")
+            if select_idx == -1:
+                raise ValueError(f"Expected SELECT, got: {raw[:100]}")
+            sql = raw[select_idx:].strip().rstrip(";")
+
+            async with get_agent_connection(user_id) as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(sql)
+                    rows = await cur.fetchall()
+
+            result = json.dumps(rows, default=lambda o: float(o) if isinstance(o, decimal.Decimal) else str(o))
+        except Exception as exc:
+            result = json.dumps({"error": str(exc)})
 
         await event_queue.enqueue_event(
             TaskArtifactUpdateEvent(

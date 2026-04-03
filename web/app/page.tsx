@@ -11,7 +11,10 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useState } from "react";
 
-const transport = new DefaultChatTransport({ api: "/api/chat" });
+const transport = new DefaultChatTransport({
+  api: "/api/chat",
+  headers: { "X-User-ID": "a1b2c3d4-e5f6-7890-abcd-ef1234567890" },
+});
 
 // Maps widgetName values to their React components
 const widgetRegistry: Record<

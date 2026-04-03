@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import decimal
 import json
+import re
 import uuid
 from datetime import datetime, timezone
+
+import anthropic
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -16,60 +20,46 @@ from a2a.utils.artifact import new_text_artifact
 from a2a.utils.message import new_agent_text_message
 from a2a.utils.task import new_task
 
-ORDERS: dict[str, dict] = {}
+from db import get_agent_connection, get_connection
+
+_anthropic = anthropic.AsyncAnthropic()
+
+_SYSTEM_PROMPT = """You are an assistant for a PostgreSQL orders database.
+
+Schema:
+  orders(
+    order_id   UUID PRIMARY KEY,
+    user_id    UUID,
+    status     VARCHAR,
+    total      NUMERIC,
+    created_at TIMESTAMPTZ
+  )
+  order_items(
+    id        UUID PRIMARY KEY,
+    order_id  UUID REFERENCES orders(order_id),
+    name      VARCHAR,
+    quantity  INTEGER,
+    price     NUMERIC
+  )
+
+The user wants to either read order information or create a new order.
+
+If the user wants to READ orders (list, check status, find order, etc.):
+  Generate a single SELECT query. Join order_items when item details are needed.
+  Rules: SELECT only. No semicolons. Do NOT add user_id conditions — RLS handles that.
+  Return ONLY the SQL.
+
+If the user wants to CREATE an order:
+  Return JSON exactly like this (no explanation):
+  {"action": "create_order", "items": [{"name": "item name", "quantity": 1, "price": 0.0}]}"""
 
 
-def create_order(items: list[dict]) -> str:
-    order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
-    total = sum(item.get("price", 0) * item.get("quantity", 1) for item in items)
-    order = {
-        "order_id": order_id,
-        "items": items,
-        "status": "pending",
-        "total": round(total, 2),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    ORDERS[order_id] = order
-    return json.dumps(order, indent=2)
-
-
-def get_order(order_id: str) -> str:
-    order_id = order_id.upper()
-    if order_id in ORDERS:
-        return json.dumps(ORDERS[order_id], indent=2)
-    return json.dumps({"error": f"Order {order_id} not found"})
-
-
-def list_orders() -> str:
-    if not ORDERS:
-        return json.dumps({"message": "No orders found", "orders": []})
-    return json.dumps(
-        {"orders": list(ORDERS.values()), "total_count": len(ORDERS)},
-        indent=2,
-    )
-
-
-def _parse_order_items(text: str) -> list[dict]:
-    """Best-effort extraction of items from natural language."""
-    items = []
-    # Look for patterns like "2 wireless mice" or "1 usb-c hub"
-    import re
-
-    # Simple quantity + product name pattern
-    patterns = re.findall(r"(\d+)\s+(.+?)(?:,|\band\b|$)", text, re.IGNORECASE)
-    if patterns:
-        for qty_str, name in patterns:
-            items.append(
-                {
-                    "name": name.strip().rstrip("."),
-                    "quantity": int(qty_str),
-                    "price": 0,  # Price will be noted as "to be confirmed"
-                }
-            )
-    if not items:
-        # Fallback: treat the whole text as a single item
-        items.append({"name": text.strip(), "quantity": 1, "price": 0})
-    return items
+def _parse_message(text: str) -> tuple[str, str]:
+    """Return (user_id, query). user_id is '' if not present."""
+    if text.startswith("[user_id:"):
+        end = text.index("]")
+        return text[9:end], text[end + 2:]
+    return "", text
 
 
 class OrdersAgentExecutor(AgentExecutor):
@@ -85,6 +75,8 @@ class OrdersAgentExecutor(AgentExecutor):
                 user_text = part.root.text
                 break
 
+        user_id, query = _parse_message(user_text)
+
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=context.task_id,
@@ -97,26 +89,67 @@ class OrdersAgentExecutor(AgentExecutor):
             )
         )
 
-        text_lower = user_text.lower()
+        try:
+            response = await _anthropic.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": query}],
+            )
+            llm_output = response.content[0].text.strip()
+            # Strip markdown code fences if present
+            llm_output = re.sub(r"```\w*\n?", "", llm_output).strip()
 
-        if "list" in text_lower or "all orders" in text_lower or "my orders" in text_lower:
-            result = list_orders()
-        elif "status" in text_lower or "get order" in text_lower or "find order" in text_lower:
-            # Extract order ID
-            import re
-            match = re.search(r"ORD-[A-Za-z0-9]+", user_text, re.IGNORECASE)
-            if match:
-                result = get_order(match.group())
+            # Find SELECT or JSON regardless of any preamble the LLM adds
+            upper = llm_output.upper()
+            select_idx = upper.find("SELECT")
+            json_idx = llm_output.find("{")
+            is_sql = select_idx != -1 and (json_idx == -1 or select_idx < json_idx)
+
+            if is_sql:
+                sql = llm_output[select_idx:].strip().rstrip(";")
+                async with get_agent_connection(user_id) as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute(sql)
+                        rows = await cur.fetchall()
+                result = json.dumps(rows, default=lambda o: float(o) if isinstance(o, decimal.Decimal) else str(o))
             else:
-                result = json.dumps({"error": "Please provide an order ID (e.g., ORD-XXXXXXXX)"})
-        elif "order" in text_lower or "place" in text_lower or "buy" in text_lower or "purchase" in text_lower:
-            items = _parse_order_items(user_text)
-            result = create_order(items)
-        else:
-            result = json.dumps({
-                "message": "I can help with orders. Try: create an order, list orders, or check order status.",
-                "available_commands": ["create order", "list orders", "get order <ORDER_ID>"],
-            })
+                json_str = llm_output[json_idx:] if json_idx != -1 else llm_output
+                parsed = json.loads(json_str)
+                if parsed.get("action") == "create_order":
+                    items = parsed.get("items", [])
+                    order_id = str(uuid.uuid4())
+                    total = sum(
+                        float(i.get("price", 0)) * int(i.get("quantity", 1))
+                        for i in items
+                    )
+                    created_at = datetime.now(timezone.utc)
+
+                    with get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """INSERT INTO orders (order_id, user_id, status, total, created_at)
+                                   VALUES (%s, %s, 'pending', %s, %s)""",
+                                [order_id, user_id or str(uuid.uuid4()), round(total, 2), created_at],
+                            )
+                            for item in items:
+                                cur.execute(
+                                    """INSERT INTO order_items (order_id, name, quantity, price)
+                                       VALUES (%s, %s, %s, %s)""",
+                                    [order_id, item["name"], item.get("quantity", 1), item.get("price", 0)],
+                                )
+
+                    result = json.dumps({
+                        "order_id": order_id,
+                        "items": items,
+                        "status": "pending",
+                        "total": round(total, 2),
+                        "created_at": created_at.isoformat(),
+                    })
+                else:
+                    result = json.dumps({"error": "Unexpected LLM response", "raw": llm_output[:200]})
+        except Exception as exc:
+            result = json.dumps({"error": str(exc)})
 
         await event_queue.enqueue_event(
             TaskArtifactUpdateEvent(

@@ -1,3 +1,5 @@
+import os
+
 import uvicorn
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -6,8 +8,11 @@ from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
+import db
 from agent_executor import OrdersAgentExecutor
 from api import api_app
+
+db.init_db(os.environ["DATABASE_URL"])
 
 agent_card = AgentCard(
     name="Orders Agent",
