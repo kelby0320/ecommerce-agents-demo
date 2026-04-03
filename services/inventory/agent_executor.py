@@ -30,24 +30,14 @@ Schema:
     name      VARCHAR,
     price     NUMERIC,
     stock     INTEGER,
-    category  VARCHAR,
-    user_id   UUID
+    category  VARCHAR
   )
 
 Generate a single SELECT query answering the user's question.
 Rules:
 - SELECT only. No INSERT, UPDATE, DELETE, DROP, or other mutations.
 - No semicolons at the end.
-- Do NOT add user_id conditions — Row Level Security handles that automatically.
 Return ONLY the SQL query, no explanation or markdown."""
-
-
-def _parse_message(text: str) -> tuple[str, str]:
-    """Return (user_id, query). user_id is '' if not present."""
-    if text.startswith("[user_id:"):
-        end = text.index("]")
-        return text[9:end], text[end + 2:]
-    return "", text
 
 
 class InventoryAgentExecutor(AgentExecutor):
@@ -63,7 +53,7 @@ class InventoryAgentExecutor(AgentExecutor):
                 user_text = part.root.text
                 break
 
-        user_id, query = _parse_message(user_text)
+        query = user_text
 
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
@@ -92,7 +82,7 @@ class InventoryAgentExecutor(AgentExecutor):
                 raise ValueError(f"Expected SELECT, got: {raw[:100]}")
             sql = raw[select_idx:].strip().rstrip(";")
 
-            async with get_agent_connection(user_id) as conn:
+            async with get_agent_connection() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute(sql)
                     rows = await cur.fetchall()

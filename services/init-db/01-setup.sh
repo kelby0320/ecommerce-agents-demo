@@ -15,24 +15,19 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname inventory_db <<-EOS
     name      VARCHAR(255) NOT NULL,
     price     NUMERIC(10,2) NOT NULL,
     stock     INTEGER NOT NULL DEFAULT 0,
-    category  VARCHAR(100),
-    user_id   UUID NOT NULL
+    category  VARCHAR(100)
   );
-
-  ALTER TABLE products ENABLE ROW LEVEL SECURITY;
-  CREATE POLICY user_isolation ON products FOR SELECT TO agent_reader
-    USING (user_id = current_setting('app.current_user_id', TRUE)::UUID);
 
   GRANT SELECT ON products TO agent_reader;
 
-  INSERT INTO products (sku, name, price, stock, category, user_id) VALUES
-    ('SKU001', 'Wireless Mouse',      29.99, 150, 'electronics', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'),
-    ('SKU002', 'USB-C Hub',           49.99,  45, 'electronics', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'),
-    ('SKU003', 'Webcam HD',           59.99,  22, 'electronics', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'),
-    ('SKU004', 'Mechanical Keyboard', 89.99,  75, 'electronics', 'b2c3d4e5-f6a7-8901-bcde-f12345678901'),
-    ('SKU005', 'Laptop Stand',        39.99,  73, 'accessories', 'b2c3d4e5-f6a7-8901-bcde-f12345678901'),
-    ('SKU006', 'Wireless Earbuds',    44.99, 200, 'electronics', 'c3d4e5f6-a7b8-9012-cdef-123456789012'),
-    ('SKU007', 'Monitor Light Bar',   34.99,  60, 'accessories', 'c3d4e5f6-a7b8-9012-cdef-123456789012');
+  INSERT INTO products (sku, name, price, stock, category) VALUES
+    ('SKU001', 'Wireless Mouse',      29.99, 150, 'electronics'),
+    ('SKU002', 'USB-C Hub',           49.99,  45, 'electronics'),
+    ('SKU003', 'Webcam HD',           59.99,  22, 'electronics'),
+    ('SKU004', 'Mechanical Keyboard', 89.99,  75, 'electronics'),
+    ('SKU005', 'Laptop Stand',        39.99,  73, 'accessories'),
+    ('SKU006', 'Wireless Earbuds',    44.99, 200, 'electronics'),
+    ('SKU007', 'Monitor Light Bar',   34.99,  60, 'accessories');
 EOSQL
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname orders_db <<-EOSQL

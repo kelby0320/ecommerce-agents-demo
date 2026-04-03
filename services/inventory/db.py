@@ -33,16 +33,12 @@ def get_connection():
 
 
 @asynccontextmanager
-async def get_agent_connection(user_id: str):
-    """Async agent_reader connection with RLS session var. SELECT only."""
+async def get_agent_connection():
+    """Async agent_reader connection. SELECT only."""
     conn = await psycopg.AsyncConnection.connect(
         _agent_dsn, row_factory=psycopg.rows.dict_row, autocommit=True
     )
     try:
-        if user_id:
-            await conn.execute(
-                "SELECT set_config('app.current_user_id', %s, FALSE)", [user_id]
-            )
         yield conn
     finally:
         await conn.close()
